@@ -1,0 +1,1330 @@
+<!DOCTYPE html>
+<html lang="en" data-motion="full">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="color-scheme" content="dark" />
+<title>c4city — Tear Engine v1.0</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;800;900&family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<style>
+/* ============================================================
+   TOKENS + BASE  (V1 shell)
+============================================================ */
+:root{
+  --bg:#05070b; --bg-footer:#070b11; --panel:#0b111a;
+  --cyan:#00f0ff; --yellow:#f5d90a; --red:#ff2a5f; --ok:#3dffa8;
+  --fg:#d6e4e8; --muted:#5f7280; --line:rgba(0,240,255,.14);
+  --f-head:'Orbitron',sans-serif; --f-body:'Rajdhani',sans-serif; --f-mono:'Share Tech Mono',monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+html,body{overflow-x:clip}
+body{
+  font-family:var(--f-body);background:var(--bg);color:var(--fg);
+  background-image:
+    linear-gradient(rgba(0,240,255,.03) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(0,240,255,.03) 1px,transparent 1px);
+  background-size:48px 48px;
+}
+body.lock{overflow:hidden}
+::selection{background:var(--yellow);color:#0b0e12}
+::-webkit-scrollbar{width:10px}
+::-webkit-scrollbar-track{background:#04060a}
+::-webkit-scrollbar-thumb{background:#12333d;border:2px solid #04060a}
+a:focus-visible,button:focus-visible,input:focus-visible{outline:1px dashed var(--cyan);outline-offset:3px}
+.mono{font-family:var(--f-mono)}
+
+/* chamfered cutbox (V1) */
+.cutbox{--c:14px;position:relative;isolation:isolate;
+  background:linear-gradient(135deg,rgba(0,240,255,.4),rgba(245,217,10,.22));
+  clip-path:polygon(var(--c) 0,100% 0,100% calc(100% - var(--c)),calc(100% - var(--c)) 100%,0 100%,0 var(--c))}
+.cutbox::before{content:'';position:absolute;inset:1.5px;z-index:-1;background:var(--panel);
+  clip-path:polygon(calc(var(--c) - .9px) 0,100% 0,100% calc(100% - var(--c) + .9px),calc(100% - var(--c) + .9px) 100%,0 100%,0 calc(var(--c) - .9px))}
+
+/* brand glitch hover (V1) */
+.glitch{position:relative}
+.glitch::before,.glitch::after{content:attr(data-text);position:absolute;inset:0;opacity:0;pointer-events:none}
+.glitch::before{color:var(--cyan)}
+.glitch::after{color:var(--red)}
+.glitch:hover::before{animation:glA 1.6s steps(1,end) infinite}
+.glitch:hover::after{animation:glB 1.6s steps(1,end) infinite}
+@keyframes glA{0%{opacity:.5;clip-path:inset(14% 0 60% 0);transform:translate(-2px,-1px)}25%{opacity:.5;clip-path:inset(58% 0 12% 0);transform:translate(2px,1px)}50%{opacity:.5;clip-path:inset(4% 0 80% 0);transform:translate(-1px,1px)}75%{opacity:.5;clip-path:inset(72% 0 6% 0);transform:translate(2px,-1px)}100%{opacity:0}}
+@keyframes glB{0%{opacity:.5;clip-path:inset(62% 0 12% 0);transform:translate(2px,1px)}25%{opacity:.5;clip-path:inset(10% 0 72% 0);transform:translate(-2px,-1px)}50%{opacity:.5;clip-path:inset(74% 0 4% 0);transform:translate(1px,-1px)}75%{opacity:.5;clip-path:inset(34% 0 40% 0);transform:translate(-2px,1px)}100%{opacity:0}}
+
+/* global scanlines */
+.scanlines{position:fixed;inset:0;pointer-events:none;z-index:9998;opacity:.2;
+  background:repeating-linear-gradient(0deg,rgba(0,0,0,.35) 0 1px,transparent 1px 3px)}
+
+/* ============================================================
+   TEAR SYSTEM — CSS side
+   LAYER 1: .gpulse    element-level datamosh (glitchPulse)
+   LAYER 2: .tearing   section-level stress, driven by --gx/--gsk/--gr
+============================================================ */
+
+/* LAYER 2 — visible sections consume vars inherited from <html> */
+section.tearing, .footer-main.tearing{
+  transform:translateX(var(--gx,0px)) skewY(var(--gsk,0deg));
+  filter:drop-shadow(var(--gr,0px) 0 0 rgba(255,42,95,.75))
+         drop-shadow(calc(var(--gr,0px) * -1) 0 0 rgba(0,240,255,.6));
+  will-change:transform,filter;
+}
+/* slam-only displacement snap — declared AFTER .tearing so it wins the cascade */
+.displace{filter:url(#tearFilter)!important}
+
+/* LAYER 1 — the engine's per-element corruption state.
+   Every value below is only ever SNAP-SET by JS (tl.set, never tweened):
+   digital corruption jumps between frames, it never glides. */
+.gpulse{
+  --gbt:0%; --gbb:0%; --gjx:0px; --gsk2:0deg; --gr:0px; --ginv:0;
+  clip-path:inset(var(--gbt) 0 var(--gbb) 0);
+  transform:translateX(var(--gjx)) skewX(var(--gsk2));
+  filter:drop-shadow(var(--gr) 0 0 rgba(255,42,95,.8))
+         drop-shadow(calc(-1 * var(--gr)) 0 0 rgba(0,240,255,.7))
+         invert(var(--ginv));
+  will-change:transform,filter,clip-path;
+}
+
+/* viewport-edge tear strips (slam targets — deliberately chamfer-free
+   and transform-free so glitchPulse owns them completely) */
+.edge-tear{position:fixed;left:0;right:0;height:54px;opacity:0;pointer-events:none;z-index:9991;
+  background:
+    linear-gradient(180deg,rgba(0,240,255,0),rgba(0,240,255,.22) 44%,rgba(255,255,255,.55) 50%,rgba(255,42,95,.28) 56%,rgba(255,42,95,0)),
+    repeating-linear-gradient(0deg,rgba(255,255,255,.16) 0 1px,transparent 1px 4px)}
+.edge-tear.top{top:0}
+.edge-tear.bot{bottom:0;
+  background:
+    linear-gradient(0deg,rgba(0,240,255,0),rgba(0,240,255,.22) 44%,rgba(255,255,255,.55) 50%,rgba(255,42,95,.28) 56%,rgba(255,42,95,0)),
+    repeating-linear-gradient(0deg,rgba(255,255,255,.16) 0 1px,transparent 1px 4px)}
+
+/* stress overlay — scanlines + red vignette, opacity driven by intensity */
+.tear-overlay{position:fixed;inset:0;z-index:9990;pointer-events:none;opacity:0;
+  background:
+    repeating-linear-gradient(0deg,rgba(255,255,255,.045) 0 1px,transparent 1px 3px),
+    radial-gradient(130% 110% at 50% 50%,transparent 58%,rgba(255,42,95,.1) 82%,rgba(255,42,95,.22) 100%)}
+
+/* one white frame at slam-entry */
+.tear-flash{position:fixed;inset:0;background:#eafcff;opacity:0;z-index:9995;pointer-events:none}
+
+/* engine fully disarmed (no GSAP / reduced motion) — shell stays complete */
+html.fx-off #hud,html.fx-off .edge-tear,html.fx-off .tear-overlay{display:none}
+
+/* ============================================================
+   TELEMETRY HUD — instrument panel for the engine
+   (no clip-path, no resting transform: it is itself a glitch target)
+============================================================ */
+#hud{position:fixed;right:16px;bottom:88px;z-index:9992;width:198px;
+  background:rgba(4,8,13,.88);border:1px solid var(--line);border-left:2px solid var(--yellow);
+  padding:13px 14px;font-family:var(--f-mono);font-size:10px;color:var(--muted);
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  transition:transform .35s cubic-bezier(.2,.9,.3,1),opacity .35s}
+#hud.hidden{transform:translateX(130%);opacity:0}
+.hud-head{display:flex;align-items:center;gap:7px;letter-spacing:.22em;color:var(--fg);margin-bottom:10px}
+.hud-dot{width:6px;height:6px;background:var(--ok);box-shadow:0 0 8px var(--ok);animation:blink 1.6s steps(1) infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.25}}
+.hud-grid{display:grid;grid-template-columns:32px 1fr auto;gap:4px 6px;align-items:baseline}
+.hud-grid b{color:var(--fg);font-weight:400;font-size:12px}
+.hud-grid i{font-style:normal;font-size:9px}
+.hud-bar{display:flex;gap:3px;margin:9px 0 7px}
+.hud-bar i{flex:1;height:8px;background:rgba(255,255,255,.07)}
+#hud[data-lvl="1"] .hud-bar i.on{background:var(--cyan)}
+#hud[data-lvl="2"] .hud-bar i.on{background:var(--yellow)}
+#hud[data-lvl="3"] .hud-bar i.on{background:var(--red)}
+#hud[data-lvl="1"] #hudLvl{color:var(--cyan)}
+#hud[data-lvl="2"] #hudLvl{color:var(--yellow)}
+#hud[data-lvl="3"] #hudLvl{color:var(--red)}
+.hud-note{min-height:13px;color:var(--red);letter-spacing:.06em;visibility:hidden}
+.hud-note.show{visibility:visible}
+.hud-btns{display:flex;gap:4px;margin-top:8px}
+.hud-btns button{flex:1;background:rgba(0,240,255,.08);border:1px solid var(--line);color:var(--cyan);
+  font-family:var(--f-mono);font-size:9px;padding:6px 0;cursor:pointer;letter-spacing:.06em;transition:.15s}
+.hud-btns button:hover{background:var(--cyan);color:#04121a}
+.hud-keys{margin-top:8px;letter-spacing:.1em}
+.hud-hint{margin-top:9px;padding-top:9px;border-top:1px solid var(--line);color:var(--yellow);letter-spacing:.12em;line-height:1.7}
+
+/* ============================================================
+   SHELL — topbar / nav / mmenu (V1)
+============================================================ */
+.topbar{position:fixed;top:0;left:0;right:0;height:30px;z-index:1002;background:#04060a;
+  border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;
+  padding:0 22px;font-family:var(--f-mono);font-size:10px;letter-spacing:.18em;color:var(--muted);transition:transform .35s}
+body.scrolled .topbar{transform:translateY(-100%)}
+.tb-left{display:flex;align-items:center;gap:9px}
+.tb-center .ok{color:var(--ok)}
+@media (max-width:860px){.tb-center{display:none}}
+
+.nav{position:fixed;top:46px;left:20px;right:20px;height:72px;z-index:1001;
+  display:flex;align-items:center;gap:26px;padding:0 26px 0 29px;
+  background:rgba(6,10,16,.82);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  clip-path:polygon(0 0,100% 0,100% calc(100% - 18px),calc(100% - 18px) 100%,0 100%);
+  box-shadow:inset 0 1px 0 rgba(0,240,255,.28),inset 1px 0 0 rgba(0,240,255,.1),inset -1px 0 0 rgba(0,240,255,.1),inset 0 -1px 0 rgba(0,240,255,.18);
+  transition:top .35s,height .35s,background .35s}
+body.scrolled .nav{top:12px;height:60px;background:rgba(5,8,13,.95)}
+.nav::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;
+  background:linear-gradient(180deg,var(--yellow),var(--red) 70%,transparent)}
+.nav::after{content:'';position:absolute;right:-3px;bottom:8.4px;width:25.5px;height:2.5px;
+  background:linear-gradient(90deg,var(--cyan),var(--yellow));
+  transform:rotate(-45deg);filter:drop-shadow(0 0 6px var(--cyan))}
+.brand{display:flex;align-items:center;gap:13px;text-decoration:none;color:var(--fg)}
+.brand-mark{width:38px;height:38px;flex:none;background:var(--yellow);color:#0a0d12;font-size:15px;
+  display:inline-flex;align-items:center;justify-content:center;transition:filter .25s;
+  clip-path:polygon(0 0,100% 0,100% calc(100% - 11px),calc(100% - 11px) 100%,0 100%)}
+.brand:hover .brand-mark{filter:drop-shadow(0 0 9px rgba(245,217,10,.6))}
+.brand-textbox{display:flex;flex-direction:column}
+.brand-text{font-family:var(--f-head);font-weight:800;font-size:17px;letter-spacing:.16em;line-height:1;transition:color .2s}
+.brand:hover .brand-text{color:var(--cyan)}
+.brand-sub{font-family:var(--f-mono);font-size:8px;letter-spacing:.34em;color:var(--muted);margin-top:4px}
+.nav-links{display:flex;align-items:center;margin-left:20px}
+.nav-link{position:relative;display:inline-flex;align-items:center;padding:10px 13px;text-decoration:none;
+  color:var(--muted);font-weight:700;font-size:13px;letter-spacing:.24em;transition:color .2s,text-shadow .2s}
+.nav-link:hover{color:var(--cyan);text-shadow:0 0 14px rgba(0,240,255,.75)}
+.nl-idx{font-family:var(--f-mono);font-size:9px;color:var(--yellow);opacity:.75;margin-right:8px}
+.nav-link::before,.nav-link::after{content:'';position:absolute;width:9px;height:9px;opacity:0;border:1px solid var(--cyan);transition:.25s}
+.nav-link::before{top:0;left:0;border-right:0;border-bottom:0}
+.nav-link::after{bottom:0;right:0;border-left:0;border-top:0}
+.nav-link:hover::before{opacity:1;top:-4px;left:-4px}
+.nav-link:hover::after{opacity:1;bottom:-4px;right:-4px}
+.nav-link.active{color:var(--yellow)}
+.nav-link.active::before,.nav-link.active::after{opacity:1;border-color:var(--yellow)}
+.nl-sep{font-style:normal;font-family:var(--f-mono);font-size:9px;color:rgba(0,240,255,.28);margin:0 7px}
+.nav-actions{display:flex;align-items:center;gap:12px;margin-left:auto}
+.btn{display:inline-flex;align-items:center;gap:10px;font-family:var(--f-head);font-weight:700;
+  font-size:11px;letter-spacing:.18em;cursor:pointer;text-decoration:none;border:none;
+  padding:13px 22px;transition:.22s}
+.btn i{font-size:10px}
+.btn > *{position:relative;z-index:1}
+.btn-solid{position:relative;background:var(--yellow);color:#0a0d12;overflow:hidden;
+  clip-path:polygon(10px 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%,0 10px)}
+.btn-solid::after{content:'';position:absolute;top:0;bottom:0;left:-45%;width:36%;
+  background:linear-gradient(105deg,transparent,rgba(255,255,255,.75),transparent);
+  transform:skewX(-20deg);transition:left .45s ease}
+.btn-solid:hover{transform:translateY(-2px);filter:drop-shadow(0 0 14px rgba(245,217,10,.55))}
+.btn-solid:hover::after{left:125%}
+.btn-ghost{--c:10px;color:var(--cyan);background:linear-gradient(135deg,rgba(0,240,255,.65),rgba(0,240,255,.18))}
+.btn-ghost:hover{color:#dbfaff;filter:drop-shadow(0 0 10px rgba(0,240,255,.35));
+  background:linear-gradient(135deg,var(--cyan),rgba(0,240,255,.4))}
+.btn-ghost:hover::before{background:#0c1e29}
+.burger{display:none;flex-direction:column;gap:5px;background:none;border:none;cursor:pointer;padding:10px 4px;margin-left:auto}
+.burger span{display:block;height:2px;background:var(--fg);transition:.3s}
+.burger span:nth-child(1){width:26px}
+.burger span:nth-child(2){width:16px;background:var(--cyan)}
+.burger span:nth-child(3){width:26px}
+.burger.open span:nth-child(1){transform:translateY(7px) rotate(45deg)}
+.burger.open span:nth-child(2){opacity:0}
+.burger.open span:nth-child(3){transform:translateY(-7px) rotate(-45deg)}
+.mmenu{position:fixed;inset:0;z-index:1000;background:rgba(4,7,11,.96);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  display:flex;flex-direction:column;justify-content:center;padding:110px 9vw 44px;
+  opacity:0;visibility:hidden;transition:opacity .3s,visibility .3s}
+.mmenu.open{opacity:1;visibility:visible}
+.mmenu-links a{display:flex;align-items:baseline;gap:18px;padding:14px 0;text-decoration:none;
+  font-family:var(--f-head);font-weight:800;font-size:clamp(26px,7vw,42px);color:var(--fg);
+  border-bottom:1px solid rgba(0,240,255,.12);transition:color .2s,padding-left .2s}
+.mmenu-links a span{font-family:var(--f-mono);font-size:12px;color:var(--yellow)}
+.mmenu-links a em{font-style:normal;margin-left:auto;font-family:var(--f-mono);font-size:12px;color:var(--muted)}
+.mmenu-links a:hover{color:var(--cyan);padding-left:12px}
+.mmenu-actions{display:flex;gap:14px;flex-wrap:wrap;margin-top:36px}
+
+/* ============================================================
+   CONTENT
+============================================================ */
+.hero{min-height:100vh;position:relative;overflow:hidden;display:grid;place-items:center;
+  padding:150px 24px 110px;scroll-margin-top:90px}
+.hero::before{content:'';position:absolute;inset:0;pointer-events:none;background:
+  radial-gradient(620px 420px at 20% 18%,rgba(0,240,255,.07),transparent 60%),
+  radial-gradient(720px 520px at 82% 82%,rgba(255,42,95,.05),transparent 60%)}
+.hero-num{position:absolute;top:11vh;right:4vw;font-family:var(--f-head);font-weight:900;
+  font-size:clamp(140px,24vw,330px);line-height:1;color:transparent;
+  -webkit-text-stroke:1px rgba(0,240,255,.08);pointer-events:none;user-select:none}
+.slash-a{position:absolute;height:1px;pointer-events:none;top:24%;left:-5%;right:32%;transform:rotate(-4deg);
+  background:linear-gradient(90deg,transparent,rgba(0,240,255,.4))}
+.hero-inner{position:relative;text-align:center;display:flex;flex-direction:column;align-items:center}
+.hero-tag{font-family:var(--f-mono);font-size:11px;color:var(--yellow);letter-spacing:.28em;margin-bottom:26px}
+.hero-tag::after{content:'▌';margin-left:8px;animation:blink 1s steps(1) infinite}
+.hero-title{font-family:var(--f-head);font-weight:900;font-size:clamp(52px,11vw,148px);
+  letter-spacing:.03em;line-height:.95;color:#edf6f9;
+  text-shadow:0 0 42px rgba(0,240,255,.28),0 0 90px rgba(0,240,255,.12)}
+.hero-sub{margin:26px auto 38px;max-width:640px;color:#93a7b0;font-size:17px;line-height:1.75;font-weight:500}
+.hero-sub b{color:var(--yellow);font-weight:600}
+.hero-ctas{display:flex;gap:16px;flex-wrap:wrap;justify-content:center}
+.hero-meta{display:flex;flex-wrap:wrap;justify-content:center;gap:14px 36px;margin-top:46px;
+  font-family:var(--f-mono);font-size:10.5px;letter-spacing:.12em;color:var(--muted)}
+.hero-meta b{color:var(--cyan);font-weight:400;margin-left:6px}
+.scroll-cue{position:absolute;bottom:26px;left:50%;text-decoration:none;text-align:center;
+  font-family:var(--f-mono);font-size:10px;letter-spacing:.3em;color:var(--muted);
+  animation:cueFloat 2.4s ease-in-out infinite;transition:color .2s}
+.scroll-cue:hover{color:var(--cyan)}
+.scroll-cue b{display:block;color:var(--yellow);font-weight:400;margin-top:6px}
+@keyframes cueFloat{0%,100%{transform:translate(-50%,0)}50%{transform:translate(-50%,8px)}}
+
+.sect{padding:96px 5vw;max-width:1280px;margin:0 auto;scroll-margin-top:90px}
+.sect-tag{font-family:var(--f-mono);font-size:11px;color:var(--cyan);letter-spacing:.3em;margin-bottom:14px}
+.sect-title{font-family:var(--f-head);font-weight:800;font-size:clamp(26px,4.2vw,46px);
+  letter-spacing:.04em;text-transform:uppercase}
+.sect-title em{font-family:var(--f-body);font-style:italic;font-weight:700;color:var(--yellow);
+  text-transform:none;letter-spacing:0}
+.sect-head{margin-bottom:44px}
+
+.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:26px}
+.card{--c:16px;padding:30px 26px;transition:transform .25s,filter .25s,background .25s;
+  background:linear-gradient(135deg,rgba(0,240,255,.35),rgba(245,217,10,.16))}
+.card:hover{transform:translateY(-6px);filter:drop-shadow(0 16px 24px rgba(0,0,0,.5));
+  background:linear-gradient(135deg,rgba(0,240,255,.7),rgba(245,217,10,.4))}
+.card:hover::before{background:#0d1622}
+.card i{font-size:26px;color:var(--cyan);transition:color .25s}
+.card:hover i{color:var(--yellow)}
+.card-idx{position:absolute;top:20px;right:22px;font-family:var(--f-mono);font-size:10px;color:var(--yellow);opacity:.85}
+.card h3{font-family:var(--f-head);font-weight:700;font-size:15px;letter-spacing:.24em;margin:18px 0 12px}
+.mono-list{list-style:none}
+.mono-list li{display:flex;justify-content:space-between;padding:9px 0;
+  border-bottom:1px solid rgba(0,240,255,.09);font-family:var(--f-mono);font-size:12px;color:var(--muted)}
+.mono-list li span:last-child{color:var(--fg)}
+
+/* districts — tall editorial rows, prime tearing fodder */
+.dist-row{display:grid;grid-template-columns:130px 1fr auto;gap:28px;align-items:center;
+  padding:38px 8px;border-bottom:1px solid var(--line)}
+.dist-row:first-of-type{border-top:1px solid var(--line)}
+.dist-num{font-family:var(--f-head);font-weight:900;font-size:56px;color:transparent;
+  -webkit-text-stroke:1px rgba(0,240,255,.35);line-height:1}
+.dist-row h3{font-family:var(--f-head);font-weight:700;font-size:clamp(17px,2.4vw,26px);letter-spacing:.12em}
+.dist-row p{color:var(--muted);font-size:15px;margin-top:6px;letter-spacing:.04em}
+.dist-threat{text-align:right}
+.dist-threat span{display:block;font-family:var(--f-mono);font-size:9px;letter-spacing:.25em;color:var(--muted);margin-bottom:8px}
+.pips{display:flex;gap:4px;justify-content:flex-end}
+.pips i{width:20px;height:9px;background:rgba(255,255,255,.08)}
+.pips i.on{background:var(--cyan)}
+.dist-row.hot .pips i.on{background:var(--red)}
+
+/* media screens */
+.screens{display:grid;grid-template-columns:repeat(3,1fr);gap:26px}
+.screen{--c:14px;position:relative;cursor:pointer;transition:transform .25s}
+.screen:hover{transform:translateY(-5px)}
+.screen-img{width:100%;aspect-ratio:16/9}
+.s1{background:linear-gradient(135deg,rgba(0,240,255,.28),transparent 60%),repeating-linear-gradient(45deg,#0b1219 0 12px,#0e1720 12px 24px)}
+.s2{background:linear-gradient(135deg,rgba(245,217,10,.22),transparent 60%),repeating-linear-gradient(-45deg,#0b1219 0 12px,#10161f 12px 24px)}
+.s3{background:linear-gradient(135deg,rgba(255,42,95,.22),transparent 60%),repeating-linear-gradient(45deg,#0b1219 0 12px,#120f18 12px 24px)}
+.cam{position:absolute;top:12px;left:14px;font-family:var(--f-mono);font-size:9px;color:var(--cyan);letter-spacing:.2em}
+.screen-play{--c:10px;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:56px;height:56px;display:flex;align-items:center;justify-content:center;
+  color:var(--cyan);font-size:15px;transition:transform .25s,color .25s;cursor:pointer}
+.screen:hover .screen-play{transform:translate(-50%,-50%) scale(1.14);color:#0a0d12}
+.screen:hover .screen-play::before{background:var(--yellow)}
+.screen::after{content:'';position:absolute;top:0;bottom:0;left:-35%;width:30%;pointer-events:none;
+  background:linear-gradient(105deg,transparent,rgba(0,240,255,.18),transparent);transition:left .6s ease}
+.screen:hover::after{left:115%}
+.screen figcaption{display:flex;justify-content:space-between;padding:14px 4px 4px;
+  font-family:var(--f-mono);font-size:10.5px;letter-spacing:.1em;color:var(--muted)}
+.screen figcaption b{color:var(--yellow);font-weight:400}
+
+/* signal — the engine room (tall) */
+#signal{position:relative}
+#signal .watermark{position:absolute;right:-2vw;top:6vh;font-family:var(--f-head);font-weight:900;
+  font-size:clamp(120px,20vw,300px);line-height:.8;color:transparent;
+  -webkit-text-stroke:1px rgba(0,240,255,.07);pointer-events:none;user-select:none}
+.signal-intro{max-width:560px;color:#93a7b0;font-size:17px;line-height:1.75;margin-bottom:48px}
+.signal-intro b{color:var(--cyan);font-weight:600}
+.ladder{--c:16px;padding:10px 26px;margin-bottom:48px;max-width:760px}
+.ladder-row{display:grid;grid-template-columns:130px 100px 1fr;gap:18px;align-items:baseline;
+  padding:16px 0;border-bottom:1px solid rgba(0,240,255,.08);font-family:var(--f-mono);font-size:12px}
+.ladder-row:last-child{border-bottom:none}
+.ladder-row code{color:var(--muted)}
+.ladder-row b{font-family:var(--f-head);font-weight:700;font-size:12px;letter-spacing:.18em}
+.ladder-row span{color:var(--muted)}
+.ladder-row:nth-child(2) b{color:var(--cyan)}
+.ladder-row:nth-child(3) b{color:var(--yellow)}
+.ladder-row:nth-child(4) b{color:var(--red)}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;max-width:900px}
+.stat{border-left:2px solid var(--yellow);padding:6px 0 6px 16px}
+.stat b{display:block;font-family:var(--f-head);font-weight:800;font-size:clamp(20px,2.6vw,30px);color:var(--fg)}
+.stat span{font-family:var(--f-mono);font-size:9.5px;letter-spacing:.2em;color:var(--muted)}
+.law{padding:130px 0 90px;text-align:center}
+.law h3{font-family:var(--f-body);font-weight:700;font-size:clamp(28px,5.4vw,56px);letter-spacing:.06em;line-height:1.25}
+.law h3 b{color:var(--red);font-weight:700}
+.law h3 i{font-style:normal;color:var(--ok)}
+.law p{margin-top:18px;font-family:var(--f-mono);font-size:11px;letter-spacing:.18em;color:var(--muted)}
+
+/* ============================================================
+   MERGED PORTFOLIO - work rows / about / contact (index content)
+============================================================ */
+.work-list{display:flex;flex-direction:column}
+.work-row{display:grid;grid-template-columns:210px 1fr minmax(200px,auto);gap:30px;align-items:center;
+  padding:30px 8px;border-bottom:1px solid var(--line);transition:background .25s}
+.work-row:first-child{border-top:1px solid var(--line)}
+.work-row:hover{background:linear-gradient(90deg,rgba(0,240,255,.05),transparent 65%)}
+.work-thumb{--c:12px;position:relative;overflow:hidden;aspect-ratio:16/10}
+.work-thumb img{width:100%;height:100%;object-fit:cover;display:block;
+  filter:grayscale(var(--desat,0)) saturate(calc(.7 * (1 - var(--desat,0))))
+         contrast(calc(1.1 + var(--desat,0) * .12)) brightness(calc(.9 + var(--flash,0) * 1.25))}
+.work-row:hover .work-thumb img{
+  filter:grayscale(var(--desat,0)) saturate(calc(.7 * (1 - var(--desat,0))))
+         contrast(calc(1.1 + var(--desat,0) * .12)) brightness(calc(1.15 + var(--flash,0) * 1.25))}
+.work-index{position:absolute;top:10px;left:13px;z-index:2;font-family:var(--f-mono);
+  font-size:10px;letter-spacing:.2em;color:var(--yellow);text-shadow:0 0 10px rgba(0,0,0,.85)}
+.work-cat{font-family:var(--f-mono);font-size:10px;letter-spacing:.28em;color:var(--cyan);margin-bottom:9px}
+.work-row h3{font-family:var(--f-head);font-weight:700;font-size:clamp(16px,2vw,22px);letter-spacing:.1em}
+.work-desc{color:var(--muted);font-size:15px;letter-spacing:.03em;margin-top:9px;max-width:520px}
+.work-meta{min-width:200px}
+.about-grid{display:grid;grid-template-columns:1fr 1fr;gap:26px 48px;align-items:start}
+.contact-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:22px 26px;max-width:900px}
+
+/* ============================================================
+   SCROLL-DOWN MONOCHROME FLASH - every image on the page drains
+   to B&W with a stepped brightness flash while scrolling down,
+   and glides back to colour as the scroll decays.
+   Vars (--desat 0..1 / --flash 0..1) are written by the engine.
+============================================================ */
+img,.screen-img{
+  filter:grayscale(var(--desat,0)) brightness(calc(1 + var(--flash,0)));
+}
+
+/* ============================================================
+   FOOTER (V1)
+============================================================ */
+.ticker{position:relative;z-index:3;background:var(--yellow);overflow:hidden;
+  width:106%;margin:-18px 0 10px -3%;transform:rotate(-1.3deg);box-shadow:0 10px 34px rgba(0,0,0,.55)}
+.ticker-track{display:flex;width:max-content;animation:tick 26s linear infinite}
+.ticker:hover .ticker-track{animation-play-state:paused}
+.ticker-track span{font-family:var(--f-head);font-weight:800;font-size:13px;
+  letter-spacing:.32em;color:#0a0d12;padding:13px 0;white-space:nowrap}
+@keyframes tick{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+.fcap{display:block;width:100%;height:78px;margin-bottom:-1px}
+.capdot{animation:blink 2.2s steps(1) infinite}
+.footer-main{position:relative;overflow:hidden;background:var(--bg-footer);padding:76px 5vw 54px}
+.f-slash{position:absolute;top:0;bottom:0;left:64%;width:1px;transform:rotate(14deg);
+  background:linear-gradient(180deg,transparent,rgba(245,217,10,.22),transparent);pointer-events:none}
+.watermark-f{position:absolute;right:-1vw;bottom:-14px;font-family:var(--f-head);font-weight:900;
+  font-size:clamp(90px,15vw,230px);line-height:.8;letter-spacing:.02em;color:transparent;
+  -webkit-text-stroke:1px rgba(0,240,255,.07);pointer-events:none;user-select:none}
+.f-grid{position:relative;display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr;gap:48px}
+.f-tag{color:#8ba0a9;font-size:15px;line-height:1.75;margin-top:20px;max-width:380px}
+.f-tag b{color:var(--yellow);font-weight:600}
+.nl{--c:12px;display:flex;align-items:center;gap:10px;padding:6px 6px 6px 14px;margin-top:26px;max-width:430px;transition:background .25s}
+.nl:focus-within{background:linear-gradient(135deg,var(--cyan),rgba(0,240,255,.45))}
+.nl > i{color:var(--cyan);font-size:13px}
+.nl input{flex:1;min-width:0;background:none;border:none;outline:none;color:var(--fg);
+  font-family:var(--f-mono);font-size:13px}
+.nl input::placeholder{color:var(--muted)}
+.nl-btn{background:var(--yellow);color:#0a0d12;border:none;cursor:pointer;flex:none;
+  font-family:var(--f-head);font-weight:800;font-size:11px;letter-spacing:.15em;padding:13px 18px;
+  clip-path:polygon(8px 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%,0 8px);transition:.2s}
+.nl-btn:hover{filter:drop-shadow(0 0 9px rgba(245,217,10,.6))}
+.nl-msg{display:none;font-size:11px;letter-spacing:.08em;margin-top:12px;min-height:14px;font-family:var(--f-mono)}
+.nl-msg.show{display:block}
+.nl-msg.ok{color:var(--cyan)}
+.nl-msg.err{color:var(--red)}
+.socials{display:flex;gap:10px;margin-top:24px}
+.soc{--c:8px;width:42px;height:42px;display:inline-flex;align-items:center;justify-content:center;
+  color:var(--muted);font-size:16px;text-decoration:none;transition:.22s}
+.soc:hover{color:#0a0d12;transform:translateY(-3px);filter:drop-shadow(0 6px 10px rgba(245,217,10,.35))}
+.soc:hover::before{background:var(--yellow)}
+.f-col h4{position:relative;font-family:var(--f-head);font-weight:700;font-size:12px;
+  letter-spacing:.26em;color:var(--fg);padding-bottom:11px;margin-bottom:14px;border-bottom:1px solid var(--line)}
+.f-col h4 span{color:var(--yellow);margin-right:6px}
+.f-col h4::after{content:'';position:absolute;bottom:-1px;left:0;width:34px;height:1px;background:var(--yellow)}
+.f-col a{position:relative;display:inline-flex;align-items:center;gap:8px;padding:7px 0;text-decoration:none;
+  color:var(--muted);font-weight:600;font-size:14px;letter-spacing:.14em;text-transform:uppercase;transition:color .2s,transform .2s}
+.f-col a::before{content:'▸';font-size:10px;color:var(--yellow);opacity:0;transform:translateX(-6px);transition:.2s}
+.f-col a:hover{color:var(--fg);transform:translateX(4px)}
+.f-col a:hover::before{opacity:1;transform:translateX(0)}
+.f-bottom{position:relative;background:#04060b;border-top:1px solid var(--line);
+  padding:22px 5vw 26px;display:flex;justify-content:space-between;align-items:center;gap:20px;flex-wrap:wrap}
+.f-bottom::before{content:'';position:absolute;top:-1px;left:5vw;width:90px;height:1px;background:var(--yellow)}
+.f-copy{font-family:var(--f-mono);font-size:10.5px;letter-spacing:.08em;color:var(--muted)}
+.f-copy .sep{color:var(--yellow);margin:0 7px}
+.f-right{display:flex;align-items:center;gap:22px;flex-wrap:wrap}
+.rating{--c:10px;display:flex;align-items:center;gap:11px;padding:8px 15px}
+.rating b{font-family:var(--f-head);font-size:25px;font-weight:900;color:var(--yellow);
+  border-right:1px solid var(--line);padding-right:11px}
+.rating span{font-family:var(--f-mono);font-size:8.5px;line-height:1.6;color:var(--muted)}
+.plats i{font-size:19px;color:var(--muted);margin-left:15px;cursor:pointer;transition:color .2s}
+.plats i:hover{color:var(--cyan)}
+.to-top{--c:8px;font-family:var(--f-head);font-weight:700;font-size:10px;letter-spacing:.2em;
+  color:var(--fg);border:none;cursor:pointer;padding:11px 16px;transition:.2s}
+.to-top:hover{color:#0a0d12;filter:drop-shadow(0 0 8px rgba(245,217,10,.5))}
+.to-top:hover::before{background:var(--yellow)}
+
+/* toast */
+.toast{--c:10px;position:fixed;left:50%;bottom:28px;z-index:2000;display:flex;gap:11px;align-items:center;
+  padding:13px 21px;font-size:12px;letter-spacing:.08em;color:var(--fg);
+  background:linear-gradient(135deg,rgba(245,217,10,.85),rgba(245,217,10,.3));
+  transform:translate(-50%,140%);transition:transform .35s cubic-bezier(.2,.9,.25,1.2)}
+.toast.show{transform:translate(-50%,0)}
+.toast i{color:var(--yellow)}
+
+/* ============================================================
+   RESPONSIVE + REDUCED MOTION
+============================================================ */
+@media (max-width:1440px){.nav{gap:16px;padding:0 18px 0 22px}.nav-links{margin-left:12px}.nav-link{padding:10px 9px}.nav-actions{gap:8px}}
+@media (max-width:1280px){.nav-actions .btn-ghost{display:none}}
+@media (max-width:1080px){.nav-links,.nav-actions{display:none}.burger{display:flex}}
+@media (max-width:900px){#hud{display:none}}
+@media (max-width:760px){
+  .nav{left:14px;right:14px;padding:0 18px 0 21px}
+  .cards,.screens{grid-template-columns:1fr}
+  .work-row{grid-template-columns:1fr;gap:16px}
+  .work-meta{min-width:0}
+  .about-grid{grid-template-columns:1fr;gap:34px}
+  .contact-grid{grid-template-columns:1fr}
+  .dist-row{grid-template-columns:1fr;gap:14px}
+  .dist-threat{text-align:left}
+  .pips{justify-content:flex-start}
+  .stats{grid-template-columns:1fr 1fr}
+  .f-grid{grid-template-columns:1fr;gap:34px}
+  .f-brand{grid-column:1/-1}
+  .f-bottom{flex-direction:column;align-items:flex-start}
+  .f-right{width:100%;justify-content:space-between}
+  .plats i:first-child{margin-left:0}
+}
+@media (max-width:520px){.f-grid{grid-template-columns:1fr}.brand-text{font-size:15px}}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+  html{scroll-behavior:auto}
+}
+</style>
+</head>
+<body>
+
+<!-- SVG tear filter (slam displacement — scale snapped by JS, never tweened) -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <filter id="tearFilter" x="-4%" y="-4%" width="108%" height="108%" color-interpolation-filters="sRGB">
+    <feTurbulence type="fractalNoise" baseFrequency="0.012 0.14" numOctaves="2" seed="7" result="n"/>
+    <feDisplacementMap id="tearDisp" in="SourceGraphic" in2="n" scale="0" xChannelSelector="R" yChannelSelector="G"/>
+  </filter>
+</svg>
+
+<div class="scanlines" aria-hidden="true"></div>
+<div class="tear-overlay" id="tearOverlay" aria-hidden="true"></div>
+<div class="edge-tear top" id="edgeTop" aria-hidden="true"></div>
+<div class="edge-tear bot" id="edgeBot" aria-hidden="true"></div>
+<div class="tear-flash" id="tearFlash" aria-hidden="true"></div>
+
+<div class="topbar">
+  <div class="tb-left"><span style="width:6px;height:6px;background:var(--ok);box-shadow:0 0 8px var(--ok);display:inline-block"></span>NIGHT CITY GRID // ONLINE</div>
+  <div class="tb-center">TEAR ENGINE v1.0 — <span class="ok">ARMED</span></div>
+  <div>EN</div>
+</div>
+
+<nav class="nav" aria-label="Primary">
+  <a href="#world" class="brand">
+    <span class="brand-mark"><i class="fa-solid fa-bolt-lightning"></i></span>
+    <span class="brand-textbox">
+      <span class="brand-text glitch" data-text="c4city">c4city</span>
+      <span class="brand-sub">NIGHT CITY // 2.077</span>
+    </span>
+  </a>
+  <div class="nav-links">
+    <a href="#world" class="nav-link active"><span class="nl-idx">01</span>WORLD</a><i class="nl-sep">//</i>
+    <a href="#work" class="nav-link"><span class="nl-idx">02</span>WORK</a><i class="nl-sep">//</i>
+    <a href="#about" class="nav-link"><span class="nl-idx">03</span>ABOUT</a><i class="nl-sep">//</i>
+    <a href="#districts" class="nav-link"><span class="nl-idx">04</span>DISTRICTS</a><i class="nl-sep">//</i>
+    <a href="#signal" class="nav-link"><span class="nl-idx">05</span>THE SIGNAL</a>
+  </div>
+  <div class="nav-actions">
+    <button class="btn btn-ghost cutbox" type="button" data-trailer><i class="fa-solid fa-play"></i><span>WATCH TRAILER</span></button>
+    <button class="btn btn-solid" type="button" data-buy><span>BUY NOW</span><i class="fa-solid fa-arrow-right"></i></button>
+  </div>
+  <button class="burger" id="burger" aria-label="Open menu" aria-expanded="false"><span></span><span></span><span></span></button>
+</nav>
+
+<div class="mmenu" id="mmenu" aria-hidden="true">
+  <nav class="mmenu-links" aria-label="Mobile">
+    <a href="#world"><span>01</span>WORLD<em>//</em></a>
+    <a href="#work"><span>02</span>WORK<em>//</em></a>
+    <a href="#about"><span>03</span>ABOUT<em>//</em></a>
+    <a href="#arsenal"><span>04</span>ARSENAL<em>//</em></a>
+    <a href="#districts"><span>05</span>DISTRICTS<em>//</em></a>
+    <a href="#signal"><span>06</span>THE SIGNAL<em>//</em></a>
+    <a href="#contact"><span>07</span>CONTACT<em>//</em></a>
+  </nav>
+  <div class="mmenu-actions">
+    <button class="btn btn-ghost cutbox" type="button" data-trailer><i class="fa-solid fa-play"></i><span>WATCH TRAILER</span></button>
+    <button class="btn btn-solid" type="button" data-buy><span>BUY NOW</span><i class="fa-solid fa-arrow-right"></i></button>
+  </div>
+</div>
+
+<main>
+
+<!-- HERO -->
+<section class="hero" id="world">
+  <span class="hero-num" aria-hidden="true">07</span>
+  <span class="slash-a" aria-hidden="true"></span>
+  <div class="hero-inner">
+    <p class="hero-tag">// BUILD 2.077 — TEAR ENGINE ONLINE</p>
+    <h1 class="hero-title glitch" data-tear-head data-text="c4city">c4city</h1>
+    <p class="hero-sub">
+      A page that reacts to <b>how you move</b>, not just where you are.
+      Scroll gently and the city stays clean. Scroll hard and the signal shears apart —
+      chromatic split, band corruption, displacement snaps. Stop, and it heals in under half a second.
+    </p>
+    <div class="hero-ctas">
+      <button class="btn btn-ghost cutbox" type="button" data-trailer><i class="fa-solid fa-play"></i><span>WATCH TRAILER</span></button>
+      <button class="btn btn-solid" type="button" data-buy><span>BUY NOW</span><i class="fa-solid fa-arrow-right"></i></button>
+    </div>
+    <div class="hero-meta">
+      <span>ENGINE<b>GSAP 3.12</b></span>
+      <span>CLOCK<b>gsap.ticker</b></span>
+      <span>DEPS<b>1</b></span>
+      <span>FALLBACK<b>FULL SHELL</b></span>
+    </div>
+  </div>
+  <a href="#arsenal" class="scroll-cue">SCROLL FAST — MAKE THE CITY TEAR<b>▼ ▼ ▼</b></a>
+</section>
+
+<!-- WORK (merged portfolio — index content) -->
+<section class="sect" id="work">
+  <div class="sect-head">
+    <p class="sect-tag">// 02 — SELECTED WORK</p>
+    <h2 class="sect-title" data-tear-head>THE <em>archive</em></h2>
+  </div>
+  <p class="signal-intro">
+    A curated archive of projects spanning architecture, brand systems, motion design,
+    and digital product. Each engagement is a compression of months into a single
+    decisive artifact.
+  </p>
+  <div class="work-list">
+    <article class="work-row">
+      <div class="work-thumb cutbox">
+        <span class="work-index">01 / 05</span>
+        <img src="images/tm-620-com-01.jpg" alt="Modern architectural facade with geometric concrete forms" loading="eager">
+      </div>
+      <div class="work-body">
+        <p class="work-cat">// ARCHITECTURE</p>
+        <h3>MONOLITH TOWER</h3>
+        <p class="work-desc">A 42-story residential tower channeling raw concrete and negative space into a vertical statement of restrained power.</p>
+      </div>
+      <ul class="mono-list work-meta">
+        <li><span>CLIENT</span><span>Voss &amp; Klein</span></li>
+        <li><span>YEAR</span><span>2026</span></li>
+        <li><span>ROLE</span><span>Lead Design</span></li>
+      </ul>
+    </article>
+    <article class="work-row">
+      <div class="work-thumb cutbox">
+        <span class="work-index">02 / 05</span>
+        <img src="images/tm-620-com-02.jpg" alt="Modern office interior with dramatic lighting and clean lines" loading="lazy">
+      </div>
+      <div class="work-body">
+        <p class="work-cat">// BRAND IDENTITY</p>
+        <h3>SIGNAL BROADCAST</h3>
+        <p class="work-desc">Complete rebrand for a broadcast network. Distilled their ethos into a system of kinetic typography and interference patterns.</p>
+      </div>
+      <ul class="mono-list work-meta">
+        <li><span>CLIENT</span><span>Apex Media</span></li>
+        <li><span>YEAR</span><span>2025</span></li>
+        <li><span>ROLE</span><span>Art Direction</span></li>
+      </ul>
+    </article>
+    <article class="work-row">
+      <div class="work-thumb cutbox">
+        <span class="work-index">03 / 05</span>
+        <img src="images/tm-620-com-03.jpg" alt="Misty mountain lake landscape with reflections" loading="lazy">
+      </div>
+      <div class="work-body">
+        <p class="work-cat">// ENVIRONMENTAL</p>
+        <h3>TERRAIN PROTOCOL</h3>
+        <p class="work-desc">Dashboard interface for real-time geological survey mapping. 14 data layers rendered as a single coherent visual field.</p>
+      </div>
+      <ul class="mono-list work-meta">
+        <li><span>CLIENT</span><span>GeoSync Labs</span></li>
+        <li><span>YEAR</span><span>2025</span></li>
+        <li><span>ROLE</span><span>UI/UX Design</span></li>
+      </ul>
+    </article>
+    <article class="work-row">
+      <div class="work-thumb cutbox">
+        <span class="work-index">04 / 05</span>
+        <img src="images/tm-620-com-04.jpg" alt="Abstract digital art with flowing light trails" loading="lazy">
+      </div>
+      <div class="work-body">
+        <p class="work-cat">// MOTION DESIGN</p>
+        <h3>FLUX ENGINE</h3>
+        <p class="work-desc">A generative motion system for live event visuals. Procedurally driven, infinitely non-repeating, running at 120fps.</p>
+      </div>
+      <ul class="mono-list work-meta">
+        <li><span>CLIENT</span><span>Drift Studios</span></li>
+        <li><span>YEAR</span><span>2024</span></li>
+        <li><span>ROLE</span><span>Motion Lead</span></li>
+      </ul>
+    </article>
+    <article class="work-row">
+      <div class="work-thumb cutbox">
+        <span class="work-index">05 / 05</span>
+        <img src="images/tm-620-com-05.jpg" alt="Minimalist urban architecture with geometric patterns" loading="lazy">
+      </div>
+      <div class="work-body">
+        <p class="work-cat">// DIGITAL PRODUCT</p>
+        <h3>DATUM ARCHIVE</h3>
+        <p class="work-desc">Encrypted personal archive system. Zero-knowledge architecture wrapped in an interface that feels like handling physical documents.</p>
+      </div>
+      <ul class="mono-list work-meta">
+        <li><span>CLIENT</span><span>NordVault Inc</span></li>
+        <li><span>YEAR</span><span>2024</span></li>
+        <li><span>ROLE</span><span>Full Stack</span></li>
+      </ul>
+    </article>
+  </div>
+</section>
+
+<!-- ABOUT (merged studio profile — index content) -->
+<section class="sect" id="about">
+  <div class="sect-head">
+    <p class="sect-tag">// 03 — PROFILE</p>
+    <h2 class="sect-title" data-tear-head>ABOUT <em>the studio</em></h2>
+  </div>
+  <div class="about-grid">
+    <div>
+      <p class="signal-intro"><strong>Compression</strong> is a design practice built on the belief that the best work happens under constraints. We take complex problems and compress them into clear, decisive systems.</p>
+      <p class="signal-intro">Founded in 2020, the studio operates at the intersection of architecture, digital product, and visual identity. Our process is reductive — we strip away until only the essential remains.</p>
+    </div>
+    <div class="ladder cutbox">
+      <div class="ladder-row"><code>01</code><b>BRAND</b><span>Identity · Art Direction</span></div>
+      <div class="ladder-row"><code>02</code><b>PRODUCT</b><span>UI &amp; UX · Digital Products</span></div>
+      <div class="ladder-row"><code>03</code><b>MOTION</b><span>Motion Systems</span></div>
+      <div class="ladder-row"><code>04</code><b>SPATIAL</b><span>Architectural Visualization</span></div>
+      <div class="ladder-row"><code>05</code><b>CODE</b><span>Creative Technology</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ARSENAL -->
+<section class="sect" id="arsenal">
+  <div class="sect-head">
+    <p class="sect-tag">// 04 — ARSENAL</p>
+    <h2 class="sect-title" data-tear-head>TOOLS OF <em>the trade</em></h2>
+  </div>
+  <div class="cards">
+    <article class="card cutbox">
+      <span class="card-idx">/01</span>
+      <i class="fa-solid fa-crosshairs"></i>
+      <h3>WEAPONRY</h3>
+      <ul class="mono-list">
+        <li><span>SMART RIFLES</span><span>24</span></li>
+        <li><span>MONO BLADES</span><span>11</span></li>
+        <li><span>RAILGUNS</span><span>03</span></li>
+      </ul>
+    </article>
+    <article class="card cutbox">
+      <span class="card-idx">/02</span>
+      <i class="fa-solid fa-microchip"></i>
+      <h3>CYBERWARE</h3>
+      <ul class="mono-list">
+        <li><span>OPTICS</span><span>09</span></li>
+        <li><span>NEURAL DECKS</span><span>06</span></li>
+        <li><span>FULL-BODY KITS</span><span>02</span></li>
+      </ul>
+    </article>
+    <article class="card cutbox">
+      <span class="card-idx">/03</span>
+      <i class="fa-solid fa-gauge-high"></i>
+      <h3>VEHICLES</h3>
+      <ul class="mono-list">
+        <li><span>HYPERCARS</span><span>17</span></li>
+        <li><span>AVs</span><span>05</span></li>
+        <li><span>HOVER BIKES</span><span>08</span></li>
+      </ul>
+    </article>
+  </div>
+</section>
+
+<!-- DISTRICTS (tall — scroll mass) -->
+<section class="sect" id="districts">
+  <div class="sect-head">
+    <p class="sect-tag">// 05 — DISTRICTS</p>
+    <h2 class="sect-title" data-tear-head>KNOW THE <em>streets</em></h2>
+  </div>
+  <div class="dist-row">
+    <span class="dist-num">01</span>
+    <div><h3>WATSON — KABUKI</h3><p>ripperdocs open all night. bring eddies, leave chrome.</p></div>
+    <div class="dist-threat"><span>THREAT</span><div class="pips"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></div></div>
+  </div>
+  <div class="dist-row hot">
+    <span class="dist-num">02</span>
+    <div><h3>PACIFICA</h3><p>unmaintained. unavoidable. the gangs kept the lights on.</p></div>
+    <div class="dist-threat"><span>THREAT</span><div class="pips"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></div></div>
+  </div>
+  <div class="dist-row">
+    <span class="dist-num">03</span>
+    <div><h3>SANTO DOMINGO</h3><p>the power plant hum never stops. neither do the shipments.</p></div>
+    <div class="dist-threat"><span>THREAT</span><div class="pips"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></div></div>
+  </div>
+  <div class="dist-row">
+    <span class="dist-num">04</span>
+    <div><h3>WESTBROOK — JAPANTOWN</h3><p>neon-clean streets, dirty money. mind the fixers.</p></div>
+    <div class="dist-threat"><span>THREAT</span><div class="pips"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></div></div>
+  </div>
+  <div class="dist-row hot">
+    <span class="dist-num">05</span>
+    <div><h3>THE BADLANDS</h3><p>nomads own the dust. the dust owns everything else.</p></div>
+    <div class="dist-threat"><span>THREAT</span><div class="pips"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></div></div>
+  </div>
+</section>
+
+<!-- MEDIA -->
+<section class="sect" id="media">
+  <div class="sect-head">
+    <p class="sect-tag">// 05A — MEDIA</p>
+    <h2 class="sect-title" data-tear-head>SIGNALS FROM <em>the grid</em></h2>
+  </div>
+  <div class="screens">
+    <figure class="screen cutbox" data-trailer>
+      <div class="screen-img s1"></div>
+      <span class="cam">CAM-01 // LIVE</span>
+      <span class="screen-play cutbox"><i class="fa-solid fa-play"></i></span>
+      <figcaption>OFFICIAL REVEAL<b>02:47</b></figcaption>
+    </figure>
+    <figure class="screen cutbox" data-trailer>
+      <div class="screen-img s2"></div>
+      <span class="cam">CAM-02 // ARCHIVE</span>
+      <span class="screen-play cutbox"><i class="fa-solid fa-play"></i></span>
+      <figcaption>TECH DEMO<b>11:20</b></figcaption>
+    </figure>
+    <figure class="screen cutbox" data-trailer>
+      <div class="screen-img s3"></div>
+      <span class="cam">CAM-03 // LEAKED</span>
+      <span class="screen-play cutbox"><i class="fa-solid fa-play"></i></span>
+      <figcaption>SECTOR 07 TOUR<b>06:58</b></figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- SIGNAL (engine room, tall) -->
+<section class="sect" id="signal">
+  <span class="watermark" aria-hidden="true">07</span>
+  <div class="sect-head">
+    <p class="sect-tag">// 06 — TELEMETRY</p>
+    <h2 class="sect-title" data-tear-head>READ THE <em>signal</em></h2>
+  </div>
+  <p class="signal-intro">
+    The engine watches one input: <b>scroll velocity</b>. Position means nothing —
+    violence means everything. Four thresholds, four states of the city.
+    The panel on the right (or the <b>[G]</b> key) lets you inject corruption manually.
+  </p>
+  <div class="ladder cutbox">
+    <div class="ladder-row"><code>&lt; 300 px/s</code><b>IDLE</b><span>the city sleeps</span></div>
+    <div class="ladder-row"><code>300 – 1200</code><b>CRUISE</b><span>±1px chromatic drift</span></div>
+    <div class="ladder-row"><code>1200 – 2500</code><b>FAST</b><span>skewY · scanlines rise</span></div>
+    <div class="ladder-row"><code>&gt; 2500</code><b>SLAM</b><span>full datamosh · displacement snap</span></div>
+  </div>
+  <div class="stats">
+    <div class="stat"><b>60 Hz</b><span>ENGINE TICK</span></div>
+    <div class="stat"><b>400 ms</b><span>HEAL TIME</span></div>
+    <div class="stat"><b>3 MAX</b><span>CONCURRENT TEARS</span></div>
+    <div class="stat"><b>steps(n)</b><span>EASING — ONLY</span></div>
+  </div>
+  <div class="law">
+    <h3>CORRUPTION <b>SNAPS.</b><br>HEALING <i>GLIDES.</i></h3>
+    <p>// THE ONE LAW OF THE TEAR ENGINE — EVERY JITTER IS A FRAME JUMP, NEVER A TWEEN</p>
+  </div>
+</section>
+
+<!-- CONTACT (merged — index content) -->
+<section class="sect" id="contact">
+  <div class="sect-head">
+    <p class="sect-tag">// 07 — CONNECT</p>
+    <h2 class="sect-title" data-tear-head>GET IN <em>touch</em></h2>
+  </div>
+  <p class="signal-intro">
+    Currently accepting select projects for Q3 2026. For inquiries, collaborations,
+    or just to talk shop — reach out through any channel below.
+  </p>
+  <div class="contact-grid">
+    <div class="stat"><b>hello@compression.studio</b><span>EMAIL</span></div>
+    <div class="stat"><b>+1 (234) 567-890</b><span>PHONE</span></div>
+    <div class="stat"><b>@compression.studio</b><span>SOCIAL</span></div>
+    <div class="stat"><b>Brooklyn, NY</b><span>LOCATION</span></div>
+  </div>
+</section>
+
+</main>
+
+<!-- FOOTER -->
+<footer class="footer" id="grid">
+  <div class="ticker" aria-hidden="true">
+    <div class="ticker-track">
+      <span>NO GODS ◆ NO MASTERS ◆ ONLY CHROME ◆ STAY JACKED IN ◆ NO GODS ◆ NO MASTERS ◆ ONLY CHROME ◆ STAY JACKED IN ◆ NO GODS ◆ NO MASTERS ◆ ONLY CHROME ◆ STAY JACKED IN ◆ </span>
+      <span>NO GODS ◆ NO MASTERS ◆ ONLY CHROME ◆ STAY JACKED IN ◆ NO GODS ◆ NO MASTERS ◆ ONLY CHROME ◆ STAY JACKED IN ◆ NO GODS ◆ NO MASTERS ◆ ONLY CHROME ◆ STAY JACKED IN ◆ </span>
+    </div>
+  </div>
+  <svg class="fcap" viewBox="0 0 1440 80" preserveAspectRatio="none" aria-hidden="true">
+    <defs>
+      <linearGradient id="capG" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#00f0ff"/><stop offset=".55" stop-color="#f5d90a"/><stop offset="1" stop-color="#ff2a5f"/>
+      </linearGradient>
+    </defs>
+    <path d="M0 80 V58 H300 L342 20 H980 L1022 52 H1440 V80 Z" fill="#070b11"/>
+    <path d="M0 58 H300 L342 20 H980 L1022 52 H1440" fill="none" stroke="url(#capG)" stroke-width="2" vector-effect="non-scaling-stroke"/>
+    <circle cx="300" cy="58" r="3.2" fill="#00f0ff"/><circle cx="342" cy="20" r="3.2" fill="#00f0ff"/>
+    <circle class="capdot" cx="980" cy="20" r="3.2" fill="#f5d90a"/><circle cx="1022" cy="52" r="3.2" fill="#f5d90a"/>
+  </svg>
+  <div class="footer-main">
+    <span class="watermark-f" aria-hidden="true">C4CITY</span>
+    <span class="f-slash" aria-hidden="true"></span>
+    <div class="f-grid">
+      <div class="f-brand">
+        <a href="#world" class="brand">
+          <span class="brand-mark"><i class="fa-solid fa-bolt-lightning"></i></span>
+          <span class="brand-textbox">
+            <span class="brand-text glitch" data-text="c4city">c4city</span>
+            <span class="brand-sub">NIGHT CITY // 2.077</span>
+          </span>
+        </a>
+        <p class="f-tag">A <b>scroll-velocity glitch engine</b> riding on GSAP + ScrollTrigger. Scroll hard, watch it tear; stop, watch it heal.</p>
+        <form class="nl cutbox" id="nlForm" novalidate>
+          <i class="fa-solid fa-satellite-dish"></i>
+          <input type="email" id="nlEmail" placeholder="NET-MAIL ADDRESS //" aria-label="Email address" required>
+          <button class="nl-btn" type="submit">JACK IN</button>
+        </form>
+        <p class="nl-msg" id="nlMsg" role="status" aria-live="polite"></p>
+        <div class="socials">
+          <a class="soc cutbox" href="#" aria-label="Discord" data-toast="DISCORD: DARKNET CHANNEL"><i class="fa-brands fa-discord"></i></a>
+          <a class="soc cutbox" href="#" aria-label="X" data-toast="FEED MONITORED BY CORPOS"><i class="fa-brands fa-x-twitter"></i></a>
+          <a class="soc cutbox" href="#" aria-label="YouTube" data-toast="BROADCAST FREQUENCY OPEN"><i class="fa-brands fa-youtube"></i></a>
+          <a class="soc cutbox" href="#" aria-label="Twitch" data-toast="STREAM: LIVE FROM SECTOR 07"><i class="fa-brands fa-twitch"></i></a>
+        </div>
+      </div>
+      <nav class="f-col" aria-label="Index">
+        <h4><span>//</span>INDEX</h4>
+        <a href="#world">World</a><a href="#work">Work</a><a href="#about">About</a>
+        <a href="#arsenal">Arsenal</a><a href="#districts">Districts</a><a href="#signal">The Signal</a><a href="#contact">Contact</a>
+      </nav>
+      <nav class="f-col" aria-label="Support">
+        <h4><span>//</span>SUPPORT</h4>
+        <a href="#" data-toast="ALL FIXERS ARE BUSY">Fixers</a>
+        <a href="#" data-toast="NO TICKETS FOUND">Report a Bug</a>
+        <a href="#" data-toast="KNOWLEDGE BASE ENCRYPTED">Knowledge Base</a>
+      </nav>
+      <nav class="f-col" aria-label="Legal">
+        <h4><span>//</span>LEGAL</h4>
+        <a href="#" data-toast="ALL RIGHTS ARASAKA">Privacy</a>
+        <a href="#" data-toast="READ AT OWN RISK">Terms</a>
+        <a href="#" data-toast="COOKIE SUBROUTINES ACTIVE">Cookies</a>
+      </nav>
+    </div>
+  </div>
+  <div class="f-bottom">
+    <p class="f-copy">© 2077 c4city COLLECTIVE<span class="sep">//</span>TEAR ENGINE v1.0 · GSAP 3.12.5<span class="sep">//</span>ALL CHROME RESERVED</p>
+    <div class="f-right">
+      <div class="rating cutbox"><b>18</b><span>NEURAL VIOLENCE<br>FULL-BODY CHROME</span></div>
+      <div class="plats">
+        <i class="fa-brands fa-windows" title="PC"></i><i class="fa-brands fa-playstation" title="PlayStation"></i>
+        <i class="fa-brands fa-xbox" title="Xbox"></i><i class="fa-brands fa-steam" title="Steam"></i>
+      </div>
+      <button class="to-top cutbox" id="toTop" type="button">TOP<i class="fa-solid fa-arrow-up" style="margin-left:8px;font-size:10px"></i></button>
+    </div>
+  </div>
+</footer>
+
+<!-- TELEMETRY HUD -->
+<aside id="hud" data-lvl="0" aria-label="Scroll telemetry">
+  <p class="hud-head"><span class="hud-dot"></span>TELEMETRY</p>
+  <div class="hud-grid">
+    <span>VEL</span><b id="hudVel">00000</b><i>px/s</i>
+    <span>LVL</span><b id="hudLvl">IDLE</b><i>&nbsp;</i>
+    <span>INT</span><b id="hudInt">0.00</b><i>&nbsp;</i>
+    <span>MAX</span><b id="hudMax">00000</b><i>&nbsp;</i>
+  </div>
+  <div class="hud-bar" id="hudBar" aria-hidden="true"></div>
+  <p class="hud-note" id="hudNote" role="status"></p>
+  <div class="hud-btns">
+    <button type="button" data-inject="0.35">INJ .35</button>
+    <button type="button" data-inject="0.7">INJ .70</button>
+    <button type="button" data-inject="1">INJ 1.0</button>
+  </div>
+  <p class="hud-keys">[G] INJECT · [T] HIDE</p>
+  <p class="hud-hint">SCROLL HARD —<br>MAKE THE CITY TEAR</p>
+</aside>
+
+<div class="toast cutbox" id="toast" role="status">
+  <i class="fa-solid fa-triangle-exclamation"></i><span id="toastMsg"></span>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
+<script>
+(() => {
+'use strict';
+
+/* ============================================================
+   SHELL — menu, toast, newsletter (works with or without GSAP)
+============================================================ */
+const htmlEl = document.documentElement;
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+
+addEventListener('scroll', () => {
+  document.body.classList.toggle('scrolled', scrollY > 50);
+}, { passive: true });
+
+const mmenu = $('#mmenu'), burger = $('#burger');
+function setMenu(open){
+  mmenu.classList.toggle('open', open);
+  burger.classList.toggle('open', open);
+  document.body.classList.toggle('lock', open);
+  burger.setAttribute('aria-expanded', open);
+}
+burger.addEventListener('click', () => setMenu(!mmenu.classList.contains('open')));
+mmenu.querySelectorAll('a').forEach(a => a.addEventListener('click', () => setMenu(false)));
+
+const toast = $('#toast'), toastMsg = $('#toastMsg');
+let toastTimer;
+function showToast(msg){
+  toastMsg.textContent = msg;
+  toast.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove('show'), 2600);
+}
+ $$('[data-trailer]').forEach(el => el.addEventListener('click', () => {
+  showToast('SIGNAL LOCKED // STREAMING REVEAL TRAILER');
+  $('#media').scrollIntoView({ behavior: 'smooth' });
+}));
+ $$('[data-buy]').forEach(el => el.addEventListener('click', () =>
+  showToast('PRE-ORDER TERMINAL OFFLINE // DEMO BUILD')));
+ $$('[data-toast]').forEach(el => el.addEventListener('click', e => {
+  e.preventDefault(); showToast(el.dataset.toast);
+}));
+ $('#toTop').addEventListener('click', () => scrollTo({ top: 0, behavior: 'smooth' }));
+
+const nlForm = $('#nlForm'), nlEmail = $('#nlEmail'), nlMsg = $('#nlMsg');
+function typeMsg(el, text, cls){
+  el.className = 'nl-msg show ' + cls;
+  el.textContent = '';
+  let i = 0; clearInterval(el._t);
+  el._t = setInterval(() => {
+    el.textContent = text.slice(0, ++i);
+    if (i >= text.length) clearInterval(el._t);
+  }, 22);
+}
+nlForm.addEventListener('submit', e => {
+  e.preventDefault();
+  const v = nlEmail.value.trim();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) {
+    typeMsg(nlMsg, '>> INVALID NET-MAIL // RE-ENTER CREDENTIALS', 'err');
+    return;
+  }
+  typeMsg(nlMsg, '>> UPLINK ESTABLISHED // WELCOME TO THE GRID, c4city_', 'ok');
+  nlEmail.value = '';
+});
+
+/* ============================================================
+   TEAR ENGINE — EP.10 LAYERS 1 + 2
+   Layer 1: glitchPulse()  — element-level datamosh
+   Layer 2: velocity tear  — scroll speed → city stress
+
+   Contracts honored from the episode spec:
+   - every jitter SNAPS (tl.set only — steps law)
+   - CSS vars written via quickSetter, never direct styles
+   - decay via proxy tween (400ms, overwrite)
+   - scroll position is never touched
+   - max 3 concurrent tears (drop, don't queue)
+   - seeded randomness per element (data-glitch-seed)
+   - full no-GSAP + reduced-motion fallbacks
+   ============================================================ */
+
+const hasGSAP = !!(window.gsap && window.ScrollTrigger);
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+if (!hasGSAP || reduced) {
+  htmlEl.classList.add('fx-off');
+  if (!hasGSAP) console.info('// TEAR ENGINE OFFLINE — CDN unreachable. Shell remains fully operational.');
+  if (reduced)  console.info('// TEAR ENGINE DISABLED — prefers-reduced-motion respected.');
+  return; // shell handlers above are already bound — page is complete
+}
+
+gsap.registerPlugin(ScrollTrigger);
+
+/* ---------- refs ---------- */
+const overlay  = $('#tearOverlay');
+const edgeTop  = $('#edgeTop');
+const edgeBot  = $('#edgeBot');
+const flash    = $('#tearFlash');
+const dispMap  = $('#tearDisp');
+const hud      = $('#hud');
+const hudVel   = $('#hudVel'), hudLvl = $('#hudLvl'), hudInt = $('#hudInt'),
+      hudMax   = $('#hudMax'), hudBar = $('#hudBar'), hudNoteEl = $('#hudNote');
+
+// sections that can tear — filters are applied per-VISIBLE-SECTION, never to
+// <main>: a filter on main would rasterize the entire 7-viewport document.
+const tearTargets = $$('main > section, .footer-main');
+const headTargets = $$('[data-tear-head]');
+
+// build the 10-segment intensity bar
+for (let i = 0; i < 10; i++) hudBar.appendChild(document.createElement('i'));
+
+/* ---------- verified quickSetter for CSS vars ----------
+   gsap.quickSetter(el, '--gx', 'px') is the fast path per the spec —
+   but we verify it actually wrote the inline var once, and fall back to
+   native setProperty if not. Belt and suspenders, zero doubt. */
+function varSetter(el, name, unit){
+  try {
+    const s = gsap.quickSetter(el, name, unit);
+    s(1);
+    const ok = el.style.getPropertyValue(name) !== '';
+    s(0);
+    if (ok) return s;
+  } catch (e) { /* fall through to native */ }
+  return v => el.style.setProperty(name, v + unit);
+}
+const qGX  = varSetter(htmlEl, '--gx', 'px');    // page x-jitter
+const qGSK = varSetter(htmlEl, '--gsk', 'deg');  // page skewY
+const qGR  = varSetter(htmlEl, '--gr', 'px');    // RGB split magnitude
+const qOv  = gsap.quickSetter(overlay, 'opacity');
+const qDesat = varSetter(htmlEl, '--desat', ''); // image monochrome drain (0..1)
+const qFlash = varSetter(htmlEl, '--flash', ''); // image brightness flash (0..1)
+
+/* ---------- seeded PRNG (mulberry32) ---------- */
+const mulberry32 = s => () => {
+  s |= 0; s = s + 0x6D2B79F5 | 0;
+  let t = Math.imul(s ^ s >>> 15, 1 | s);
+  t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+  return ((t ^ t >>> 14) >>> 0) / 4294967296;
+};
+let runCount = 0;
+
+/* ============================================================
+   LAYER 1 — glitchPulse()
+   A timeline built entirely of .set() frames: band-slicing
+   clip-path, x-jitter, per-element RGB split, and one invert
+   frame above 0.7 intensity. No tweens. Corruption snaps.
+============================================================ */
+const activeGlitches = new Set();
+const MAX_CONCURRENT = 3;
+
+function glitchPulse(el, intensity = 1, duration = 0.45){
+  if (!el || intensity <= 0) return 'bad';
+  if (activeGlitches.has(el)) return 'active';
+  if (activeGlitches.size >= MAX_CONCURRENT) return 'full'; // drop, per spec
+
+  activeGlitches.add(el);
+  el.classList.add('gpulse');
+  if (!el.dataset.glitchSeed) el.dataset.glitchSeed = String(Math.floor(Math.random() * 1e9));
+  const rnd = mulberry32(+el.dataset.glitchSeed + (runCount++) * 7919);
+
+  const frames = Math.max(3, Math.round(4 + rnd() * 3)); // 4–7 band states
+  const tl = gsap.timeline({
+    onComplete(){
+      // restore stylesheet values (edge tears return to opacity 0, etc.)
+      ['--gbt','--gbb','--gjx','--gsk2','--gr','--ginv','opacity']
+        .forEach(p => el.style.removeProperty(p));
+      el.classList.remove('gpulse');
+      activeGlitches.delete(el);
+    }
+  });
+  tl.set(el, { opacity: 1 }, 0);
+
+  for (let f = 0; f < frames; f++){
+    const t = (f / frames) * duration;
+    tl.set(el, {
+      '--gbt': (rnd() * 60).toFixed(1) + '%',                          // band top
+      '--gbb': (rnd() * 60).toFixed(1) + '%',                          // band bottom
+      '--gjx': ((rnd() * 2 - 1) * 12 * intensity).toFixed(1) + 'px',   // x-jitter
+      '--gsk2': ((rnd() * 2 - 1) * 4 * intensity).toFixed(1) + 'deg',  // slice skew
+      '--gr': ((rnd() < .5 ? -1 : 1) * (1 + 4 * intensity * rnd())).toFixed(1) + 'px'
+    }, t);
+  }
+  // single invert frame — high intensity only
+  if (intensity > 0.7){
+    tl.set(el, { '--ginv': 1 }, duration * 0.4)
+      .set(el, { '--ginv': 0 }, duration * 0.4 + 0.06);
+  }
+  tl.set(el, { '--gjx': '0px' }, duration); // clean final frame
+  return 'ok';
+}
+
+/* ============================================================
+   LAYER 2 — VELOCITY TEAR
+   Input:  ScrollTrigger.getVelocity() (absolute)
+   Proxy:  snaps UP instantly, glides DOWN via a 400ms tween
+           (corruption snaps, healing glides — the one law)
+   Output: CSS vars on <html> → consumed by .tearing sections
+============================================================ */
+const proxy = { vel: 0 };
+const downProxy = { vel: 0 };  // downward-only velocity -> monochrome drain
+let lastScroll = -1;
+
+ScrollTrigger.create({
+  trigger: document.body,
+  start: 'top top',
+  end: 'bottom bottom',
+  onUpdate(self){
+    const v = Math.abs(self.getVelocity());
+    const y = self.scroll();
+    if (lastScroll < 0) lastScroll = y; // prime on first event (anchor loads)
+    const dy = y - lastScroll;
+    lastScroll = y;
+    if (v > proxy.vel) proxy.vel = v; // instant attack
+    // the drain only fires while the page is scrolling DOWN
+    const dv = dy > 0 ? v : 0;
+    if (dv > downProxy.vel) downProxy.vel = dv; // instant attack
+    // canonical decay: overwrite-killed proxy tween, 400ms
+    gsap.to(proxy, { vel: 0, duration: 0.4, ease: 'power2.out', overwrite: true });
+    gsap.to(downProxy, { vel: 0, duration: 0.45, ease: 'power2.out', overwrite: true });
+  }
+});
+
+/* intensity ladder: idle 0–.30 / cruise .30 / fast .70 / slam 1 */
+function intensityFromVel(v){
+  if (v <= 300)  return 0;
+  if (v <= 1200) return ((v - 300) / 900) * 0.30;
+  if (v <= 2500) return 0.30 + ((v - 1200) / 1300) * 0.40;
+  return Math.min(1, 0.70 + ((v - 2500) / 2500) * 0.30);
+}
+/* RGB split magnitude per the ladder: ±1px cruise / ±3px fast / +1 slam */
+function grMag(i){
+  if (i <= 0.3) return (i / 0.3) * 1;
+  if (i <= 0.7) return 1 + ((i - 0.3) / 0.4) * 2;
+  return 3 + ((i - 0.7) / 0.3) * 1;
+}
+
+const LVL_NAME = ['IDLE', 'CRUISE', 'FAST', 'SLAM'];
+const LVL_EXIT = [180, 800, 1600]; // hysteresis: sticky exit thresholds
+const heavyFX = matchMedia('(min-width: 900px)').matches;
+
+let tearing = false, level = 0, maxVel = 0;
+let nextJitter = 0, nextSlam = 0, hudNext = 0, noteTimer;
+
+/* only visible sections carry the filter cost */
+function reconcile(){
+  const vh = innerHeight;
+  for (const s of tearTargets){
+    const r = s.getBoundingClientRect();
+    s.classList.toggle('tearing', r.bottom > -60 && r.top < vh + 60);
+  }
+}
+function heal(){
+  tearTargets.forEach(s => s.classList.remove('tearing', 'displace'));
+  qGX(0); qGSK(0); qGR(0); qOv(0); qFlash(0);
+}
+
+/* slam: edges + HUD tear (3 = exact cap), white frame, displacement snap */
+function fireSlam(v, time){
+  glitchPulse(edgeTop, 1, 0.32);
+  glitchPulse(edgeBot, 1, 0.32);
+  if (!hud.classList.contains('hidden')) glitchPulse(hud, 1, 0.4);
+  gsap.fromTo(flash, { opacity: 0.5 }, { opacity: 0, duration: 0.16, ease: 'steps(3)' });
+  slamDisplace();
+  nextSlam = time + 0.55; // anti-strobe cooldown
+  // EP.07 hook — the audio kernel subscribes to this:
+  window.dispatchEvent(new CustomEvent('tear', { detail: { level: 'slam', velocity: Math.round(v) } }));
+}
+
+/* displacement for exactly ~2 frames — applied to ONE visible, reasonably
+   sized section (never <main>: filter region = element bbox) */
+function slamDisplace(){
+  if (!heavyFX) return;
+  const vh = innerHeight;
+  const s = tearTargets.find(el => {
+    const r = el.getBoundingClientRect();
+    return r.top <= vh * 0.6 && r.bottom >= vh * 0.4 && r.height < vh * 1.5;
+  });
+  if (!s || s.classList.contains('displace')) return;
+  dispMap.setAttribute('scale', '8');
+  s.classList.add('displace');
+  setTimeout(() => {
+    s.classList.remove('displace');
+    dispMap.setAttribute('scale', '0');
+  }, 50);
+}
+
+function updateHUD(v, i){
+  hudVel.textContent = String(Math.min(99999, Math.round(v))).padStart(5, '0');
+  hudInt.textContent = i.toFixed(2);
+  hudMax.textContent = String(Math.min(99999, Math.round(maxVel))).padStart(5, '0');
+  hudLvl.textContent = LVL_NAME[level];
+  hud.dataset.lvl = level;
+  const cells = hudBar.children, on = Math.round(i * 10);
+  for (let c = 0; c < 10; c++) cells[c].classList.toggle('on', c < on);
+}
+
+/* ---------- master clock: ONE gsap.ticker for the whole engine ---------- */
+gsap.ticker.add((time) => {
+  const v = proxy.vel;
+  if (v > maxVel) maxVel = v;
+
+  // level with hysteresis (snap up, sticky down)
+  const rl = v >= 2500 ? 3 : v >= 1200 ? 2 : v >= 300 ? 1 : 0;
+  if (rl > level){
+    level = rl;
+    if (level === 3 && time >= nextSlam) fireSlam(v, time);
+    else window.dispatchEvent(new CustomEvent('tear', { detail: { level: LVL_NAME[level].toLowerCase(), velocity: Math.round(v) } }));
+  } else if (rl < level && v < LVL_EXIT[level - 1]) level = rl;
+
+  const i = intensityFromVel(v);
+
+  // scroll DOWN drains every image to monochrome; the flash re-rolls with
+  // the jitter so it reads as stepped corruption, never a tween
+  const dv = downProxy.vel;
+  const desat = dv <= 300 ? 0 : Math.min(1, (dv - 300) / 1100);
+  qDesat(desat);
+
+  if (i > 0.02){
+    tearing = true;
+    reconcile();
+    if (time >= nextJitter){
+      // jitter re-rolls every 40–90ms: the EXPRESSION of corruption is
+      // stepped even though the intensity envelope is continuous
+      nextJitter = time + 0.04 + Math.random() * 0.05;
+      qGX((Math.random() * 2 - 1) * (2 + 6 * i));
+      const skewAmp = level >= 2 ? 3 * Math.min(1, Math.max(0, (i - 0.25) / 0.45)) : 0;
+      qGSK((Math.random() * 2 - 1) * skewAmp);
+      qGR((Math.random() < 0.5 ? -1 : 1) * grMag(i));
+      qOv(level >= 2 ? Math.min(0.85, 0.15 + (i - 0.3)) : 0);
+      qFlash(desat > .1 ? (0.06 + Math.random() * 0.3) * desat : 0);
+    }
+  } else if (tearing){
+    tearing = false;
+    heal(); // the glide home
+  }
+
+  if (time >= hudNext){ hudNext = time + 1 / 15; updateHUD(v, i); }
+});
+
+/* ---------- manual injection (engine validation) ---------- */
+function nearestHead(){
+  let best = null, bd = 1e9;
+  for (const h of headTargets){
+    const r = h.getBoundingClientRect();
+    const d = Math.abs((r.top + r.height / 2) - innerHeight / 2);
+    if (d < bd){ bd = d; best = h; }
+  }
+  return best;
+}
+function hudNote(msg){
+  hudNoteEl.textContent = msg;
+  hudNoteEl.classList.add('show');
+  clearTimeout(noteTimer);
+  noteTimer = setTimeout(() => hudNoteEl.classList.remove('show'), 1600);
+}
+function inject(intensity){
+  const el = nearestHead();
+  if (!el) return;
+  const r = glitchPulse(el, intensity, 0.45);
+  if (r === 'full')   hudNote('ENGINE SATURATED // 3/3 ACTIVE');
+  if (r === 'active') hudNote('TARGET ALREADY TEARING');
+  if (r === 'ok')     window.dispatchEvent(new CustomEvent('tear', { detail: { level: 'manual', intensity } }));
+}
+ $$('#hud [data-inject]').forEach(b =>
+  b.addEventListener('click', () => inject(parseFloat(b.dataset.inject))));
+
+addEventListener('keydown', e => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+  if (e.key === 'g' || e.key === 'G') inject(1);
+  else if (e.key === 't' || e.key === 'T') hud.classList.toggle('hidden');
+});
+
+/* ---------- EP.07 wiring preview (audio kernel goes here) ----------
+   window.addEventListener('tear', e => {
+     if (e.detail.level === 'slam')  synth.tear();
+     if (e.detail.level === 'fast')  synth.stress();
+   });
+-------------------------------------------------------------------- */
+
+console.log('%cTEAR ENGINE v1.0 %c// layers 1+2 armed — scroll hard. [G] injects corruption. [T] hides telemetry.',
+  'color:#f5d90a;font-weight:bold;font-size:14px', 'color:#00f0ff');
+})();
+</script>
+</body>
+</html>
